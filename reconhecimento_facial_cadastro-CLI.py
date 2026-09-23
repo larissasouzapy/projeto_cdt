@@ -1,110 +1,95 @@
+import cv2
 import sqlite3
-import json
-import urllib.request
-import pwinput
 import os
+from deepface import DeepFace
 
 DB_NAME = 'acaiteria.db'
-CONFIG_FILE = 'config_acaiteria.json'
 
-def inicializar_banco():
-    """Cria a tabela no SQLite caso ela não exista."""
+def buscar_todos_clientes():
+    if not os.path.exists(DB_NAME):
+        return []
     conexao = sqlite3.connect(DB_NAME)
     cursor = conexao.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clientes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL,
-            apelido TEXT,
-            email TEXT,
-            telefone TEXT,
-            endereco TEXT,
-            idade TEXT,
-            acai_preferido TEXT NOT NULL
-        )
-    ''')
-    conexao.commit()
+    cursor.execute("SELECT id, nome, acai_preferido, foto_path FROM clientes;")
+    resultados = cursor.fetchall()
     conexao.close()
+    return resultados
 
-def verificar_configuracoes_sistema():
-    """Usa JSON, OS e URLLIB para checar configurações e rede."""
-    print("[CLI] Verificando configurações do sistema...")
-    if not os.path.exists(CONFIG_FILE):
-        config_padrao = {
-            "nome_loja": "Açaíteria Delírio Roxo",
-            "clube_fidelidade": "Cupom de 10% ativo",
-            "status_sistema": "Online"
-        }
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config_padrao, f, ensure_ascii=False, indent=4)
-        print(f"[JSON] Arquivo '{CONFIG_FILE}' gerado com sucesso.")
+def reconhecer_cliente():
+    print("\n[IA] Iniciando captura de vídeo (Webcam)...")
+    cap = cv2.VideoCapture(0)
     
-    try:
-        urllib.request.urlopen("https://www.google.com", timeout=2)
-        print("[URLLIB] Conexão com a rede estabelecida.")
-    except Exception:
-        print("[URLLIB] Modo offline ativado.")
+    if not cap.isOpened():
+        print("[ERRO] Não foi possível acessar a webcam.")
+        return {"status": "erro", "mensagem": "Câmera indisponível"}
 
-def painel_administrativo_real():
-    """Painel CLI para gerenciamento e cadastro manual real."""
-    inicializar_banco()
-    verificar_configuracoes_sistema()
-    
-    print("\n========================================")
-    print(" PAINEL ADMINISTRATIVO - DELÍRIO ROXO (CLI)")
-    print("========================================")
-    
-    senha = pwinput.pwinput(prompt="Digite a senha de Administrador (padrão: admin123): ", mask="*")
-    
-    if senha == "admin123":
-        print("\n[ACESSO PERMITIDO] Bem-vindo ao painel de controle.")
-        while True:
-            print("\n1. Cadastrar novo cliente manualmente")
-            print("2. Listar clientes cadastrados")
-            print("3. Sair")
-            opcao = input("Escolha uma opção: ").strip()
+    cliente_encontrado = None
+    print("[IA] Olhe para a câmera. Pressione 'ESPAÇO' para confirmar ou 'ESC' para sair.")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
             
-            if opcao == "1":
-                nome = input("Nome completo: ").strip()
-                email = input("E-mail: ").strip()
-                telefone = input("Telefone: ").strip()
-                acai = input("Açaí preferido (com adicionais): ").strip()
-                
-                if not nome or not acai:
-                    print("[ERRO] Nome e Açaí preferido são obrigatórios!")
-                    continue
-                
-                conexao = sqlite3.connect(DB_NAME)
-                cursor = conexao.cursor()
-                cursor.execute('''
-                    INSERT INTO clientes (nome, email, telefone, acai_preferido) 
-                    VALUES (?, ?, ?, ?)
-                ''', (nome, email, telefone, acai))
-                conexao.commit()
-                conexao.close()
-                print(f"[SUCESSO] Cliente '{nome}' cadastrado com dados reais!")
-                
-            elif opcao == "2":
-                conexao = sqlite3.connect(DB_NAME)
-                cursor = conexao.cursor()
-                cursor.execute("SELECT id, nome, acai_preferido FROM clientes;")
-                clientes = cursor.fetchall()
-                conexao.close()
-                
-                print("\n--- CLIENTES CADASTRADOS ---")
-                if not clientes:
-                    print("Nenhum cliente cadastrado ainda.")
-                for c in clientes:
-                    print(f"ID: {c[0]} | Nome: {c[1]} | Açaí: {c[2]}")
-                print("----------------------------")
-                
-            elif opcao == "3":
-                print("Saindo do painel CLI...")
-                break
+        altura, largura, _ = frame.shape
+        cv2.rectangle(frame, (largura//3, altura//4), (2*largura//3, 3*altura//4), (0, 255, 0), 2)
+        cv2.putText(frame, "Delirio Roxo - Posicione o rosto", (40, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        cv2.imshow('Delirio Roxo - CLI', frame)
+        tecla = cv2.waitKey(1) & 0xFF
+        
+        if tecla == 32: # ESPAÇO
+            print("[IA] Processando biometria...")
+            temp_path = "temp_capture.jpg"
+            cv2.imwrite(temp_path, frame)
+            
+            clientes = buscar_todos_clientes()
+            if not clientes:
+                cliente_encontrado = {"status": "novo_cliente"}
             else:
-                print("[OPÇÃO INVÁLIDA] Tente novamente.")
-    else:
-        print("[ERRO] Senha incorreta! Acesso negado.")
+                match = False
+                for cliente in clientes:
+                    c_id, nome, acai, foto_path = cliente
+                    if foto_path and os.path.exists(foto_path):
+                        try:
+                            res = DeepFace.verify(img1_path=temp_path, img2_path=foto_path, model_name="Facenet", enforce_detection=False)
+                            if res["verified"]:
+                                cliente_encontrado = {"status": "encontrado", "id": c_id, "nome": nome, "acai_preferido": acai}
+                                match = True
+                                break
+                        except:
+                            pass
+                if not match:
+                    cliente_encontrado = {"status": "novo_cliente"}
+            
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            break
+            
+        elif tecla == 27: # ESC
+            cliente_encontrado = {"status": "cancelado"}
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    return cliente_encontrado
+
+def menu_cli():
+    while True:
+        print("\n--- DELÍRIO ROXO (CLI) ---")
+        print("1. Iniciar Reconhecimento Facial")
+        print("2. Sair")
+        opcao = input("Escolha uma opção: ")
+        
+        if opcao == "1":
+            resultado = reconhecer_cliente()
+            print(f"Resultado: {resultado}")
+        elif opcao == "2":
+            print("Saindo do sistema...")
+            break
+        else:
+            print("Opção inválida!")
 
 if __name__ == "__main__":
-    painel_administrativo_real()
+    menu_cli()
