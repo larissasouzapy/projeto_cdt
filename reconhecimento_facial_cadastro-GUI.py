@@ -1,148 +1,111 @@
-import sqlite3
-import json
-import os
 import tkinter as tk
 from tkinter import messagebox
-from src.camera import reconhecer_cliente  # Importando a sua função real da câmera!
+import cv2
+import sqlite3
+import os
+from deepface import DeepFace
 
 DB_NAME = 'acaiteria.db'
-CONFIG_FILE = 'config_acaiteria.json'
 
-class AppDelirioRoxoGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Delírio Roxo - Seu Açaí vale mais!")
-        self.root.geometry("450x480")
-        self.root.config(bg="#4A148C")
-        
-        self.carregar_configuracoes()
-        self.criar_tela_entrada()
+def buscar_todos_clientes():
+    if not os.path.exists(DB_NAME):
+        return []
+    conexao = sqlite3.connect(DB_NAME)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id, nome, acai_preferido, foto_path FROM clientes;")
+    resultados = cursor.fetchall()
+    conexao.close()
+    return resultados
 
-    def carregar_configuracoes(self):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                self.config = json.load(f)
-        else:
-            self.config = {"nome_loja": "Açaíteria Delírio Roxo"}
+def executar_reconhecimento_gui(label_status):
+    label_status.config(text="Status: Abrindo a câmera...", fg="blue")
+    root.update()
+    
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        messagebox.showerror("Erro", "Não foi possível acessar a webcam.")
+        label_status.config(text="Status: Erro na câmera", fg="red")
+        return
 
-    def limpar_tela(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
+    cliente_encontrado = None
+    messagebox.showinfo("Aviso", "Olhe para a câmera.\nPressione 'ESPAÇO' para confirmar ou 'ESC' para cancelar.")
 
-    def criar_tela_entrada(self):
-        self.root.config(bg="#4A148C")
-        
-        lbl_titulo = tk.Label(self.root, text=f"💜 {self.config.get('nome_loja', 'Delírio Roxo')} 💜", font=("Arial", 18, "bold"), bg="#4A148C", fg="white")
-        lbl_titulo.pack(pady=25)
-        
-        lbl_sub = tk.Label(self.root, text="Faça login facial ou cadastre-se!", font=("Arial", 11), bg="#4A148C", fg="#E1BEE7")
-        lbl_sub.pack(pady=10)
-        
-        # Botão de Entrar aciona o Reconhecimento Facial real
-        btn_entrar = tk.Button(self.root, text="📸 Entrar (Reconhecimento Facial)", font=("Arial", 11, "bold"), 
-                               bg="#FFC107", fg="black", width=32, height=2, command=self.login_facial)
-        btn_entrar.pack(pady=15)
-        
-        btn_cadastrar = tk.Button(self.root, text="📝 Cadastrar-se (Novo Cliente)", font=("Arial", 11), 
-                                  bg="#7B1FA2", fg="white", width=32, height=2, command=self.ir_para_cadastro)
-        btn_cadastrar.pack(pady=10)
-
-    def login_facial(self):
-        """Aciona a webcam real e valida o resultado retornado pelo camera.py"""
-        if not os.path.exists(DB_NAME):
-            messagebox.showwarning("Aviso", "Banco de dados vazio! Cadastre um cliente primeiro.")
-            self.ir_para_cadastro()
-            return
-
-        resultado_camera = reconhecer_cliente()
-        status = resultado_camera.get("status")
-        
-        if status == "encontrado":
-            nome = resultado_camera.get("nome")
-            acai = resultado_camera.get("acai_preferido")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
             
-            resposta = messagebox.askyesno(
-                "Rosto Reconhecido! 🎉", 
-                f"Olá, {nome}!\nAcesso liberado via Câmera.\n\nGosta de manter o padrão?\nPeça o de sempre: {acai}?"
-            )
-            if resposta:
-                messagebox.showinfo("Cardápio & Pagamento", "Açaí padrão confirmado! Redirecionando para o pagamento...")
-                
-        elif status == "novo_cliente":
-            messagebox.showinfo("Novo Cliente", "Rosto não cadastrado. Vamos realizar o seu cadastro!")
-            self.ir_para_cadastro()
+        altura, largura, _ = frame.shape
+        cv2.rectangle(frame, (largura//3, altura//4), (2*largura//3, 3*altura//4), (0, 255, 0), 2)
+        cv2.putText(frame, "Delirio Roxo - Posicione o rosto", (40, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        cv2.imshow('Delirio Roxo - GUI', frame)
+        tecla = cv2.waitKey(1) & 0xFF
+        
+        if tecla == 32: # ESPAÇO
+            temp_path = "temp_capture.jpg"
+            cv2.imwrite(temp_path, frame)
             
-        else:
-            messagebox.showinfo("Cancelado", "Operação de reconhecimento facial cancelada.")
-
-    def ir_para_cadastro(self):
-        self.limpar_tela()
-        
-        lbl = tk.Label(self.root, text="Cadastro - Delírio Roxo", font=("Arial", 14, "bold"), bg="#4A148C", fg="white")
-        lbl.pack(pady=8)
-        
-        tk.Label(self.root, text="Nome Completo:", bg="#4A148C", fg="white", font=("Arial", 10)).pack()
-        self.e_nome = tk.Entry(self.root, width=30, font=("Arial", 10))
-        self.e_nome.pack(pady=2)
-        
-        tk.Label(self.root, text="CPF:", bg="#4A148C", fg="white", font=("Arial", 10)).pack()
-        self.e_cpf = tk.Entry(self.root, width=30, font=("Arial", 10))
-        self.e_cpf.pack(pady=2)
-        
-        tk.Label(self.root, text="Data de Nascimento (DD/MM/AAAA):", bg="#4A148C", fg="white", font=("Arial", 10)).pack()
-        self.e_nascimento = tk.Entry(self.root, width=30, font=("Arial", 10))
-        self.e_nascimento.pack(pady=2)
-        
-        tk.Label(self.root, text="Açaí Preferido (com adicionais):", bg="#4A148C", fg="white", font=("Arial", 10)).pack()
-        self.e_acai = tk.Entry(self.root, width=30, font=("Arial", 10))
-        self.e_acai.pack(pady=2)
-        
-        # Atalho de Enter em qualquer campo para salvar
-        self.e_nome.bind("<Return>", lambda event: self.salvar_usuario())
-        self.e_cpf.bind("<Return>", lambda event: self.salvar_usuario())
-        self.e_nascimento.bind("<Return>", lambda event: self.salvar_usuario())
-        self.e_acai.bind("<Return>", lambda event: self.salvar_usuario())
-        
-        btn_salvar = tk.Button(self.root, text="Salvar e Ganhar Cupom de 10%", bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), command=self.salvar_usuario)
-        btn_salvar.pack(pady=10)
-        
-        btn_voltar = tk.Button(self.root, text="⬅ Voltar", bg="#CCCCCC", width=15, command=self.criar_tela_entrada)
-        btn_voltar.pack(pady=2)
-
-    def salvar_usuario(self):
-        nome = self.e_nome.get().strip()
-        cpf = self.e_cpf.get().strip()
-        nascimento = self.e_nascimento.get().strip()
-        acai = self.e_acai.get().strip()
-        
-        if not nome or not cpf or not acai:
-            messagebox.showerror("Erro", "Preencha os campos obrigatórios (Nome, CPF e Açaí)!")
-            return
+            clientes = buscar_todos_clientes()
+            if not clientes:
+                cliente_encontrado = {"status": "novo_cliente"}
+            else:
+                match = False
+                for cliente in clientes:
+                    c_id, nome, acai, foto_path = cliente
+                    if foto_path and os.path.exists(foto_path):
+                        try:
+                            res = DeepFace.verify(img1_path=temp_path, img2_path=foto_path, model_name="Facenet", enforce_detection=False)
+                            if res["verified"]:
+                                cliente_encontrado = {"status": "encontrado", "id": c_id, "nome": nome, "acai_preferido": acai}
+                                match = True
+                                break
+                        except:
+                            pass
+                if not match:
+                    cliente_encontrado = {"status": "novo_cliente"}
             
-        conexao = sqlite3.connect(DB_NAME)
-        cursor = conexao.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS clientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT NOT NULL,
-                cpf TEXT,
-                data_nascimento TEXT,
-                acai_preferido TEXT NOT NULL
-            )
-        ''')
-        
-        cursor.execute(
-            "INSERT INTO clientes (nome, cpf, data_nascimento, acai_preferido) VALUES (?, ?, ?, ?)", 
-            (nome, cpf, nascimento, acai)
-        )
-        conexao.commit()
-        conexao.close()
-        
-        messagebox.showinfo("Sucesso!", f"Parabéns, {nome}!\nVocê entrou no clube Delírio Roxo e ganhou 10% de desconto!")
-        self.criar_tela_entrada()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            break
+            
+        elif tecla == 27: # ESC
+            cliente_encontrado = {"status": "cancelado"}
+            break
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = AppDelirioRoxoGUI(root)
-    root.mainloop()
+    cap.release()
+    cv2.destroyAllWindows()
+
+    # Tratando o resultado na GUI
+    if cliente_encontrado["status"] == "encontrado":
+        msg = f"Bem-vindo de volta, {cliente_encontrado['nome']}!\nAçaí preferido: {cliente_encontrado['acai_preferido']}"
+        messagebox.showinfo("Cliente Reconhecido!", msg)
+        label_status.config(text=f"Status: Cliente {cliente_encontrado['nome']} identificado!", fg="green")
+    elif cliente_encontrado["status"] == "novo_cliente":
+        messagebox.showinfo("Novo Cliente", "Rosto não cadastrado. Redirecionando para cadastro!")
+        label_status.config(text="Status: Novo cliente detectado", fg="orange")
+    else:
+        label_status.config(text="Status: Operação cancelada", fg="gray")
+
+# Configuração da Janela Principal do Tkinter
+root = tk.Tk()
+root.title("Delírio Roxo - Sistema de Açaíteria")
+root.geometry("400x300")
+root.config(bg="#f3e5f5") # Tom roxo claro
+
+titulo = tk.Label(root, text="🍇 Delírio Roxo 🍇", font=("Helvetica", 18, "bold"), bg="#f3e5f5", fg="#4a148c")
+titulo.pack(pady=20)
+
+status_label = tk.Label(root, text="Status: Aguardando ação...", font=("Helvetica", 10), bg="#f3e5f5", fg="#333")
+status_label.pack(pady=10)
+
+btn_reconhecer = tk.Button(root, text="Iniciar Reconhecimento Facial", font=("Helvetica", 12, "bold"), 
+                           bg="#7b1fa2", fg="white", padx=10, pady=5, 
+                           command=lambda: executar_reconhecimento_gui(status_label))
+btn_reconhecer.pack(pady=20)
+
+btn_sair = tk.Button(root, text="Sair", font=("Helvetica", 10), bg="#d32f2f", fg="white", width=10, command=root.quit)
+btn_sair.pack(pady=5)
+
+root.mainloop()
