@@ -1,32 +1,31 @@
 import cv2
 import sqlite3
 import os
+from deepface import DeepFace
 
-# Caminho para o banco de dados compartilhado da açaíteria
 DB_NAME = 'acaiteria.db'
+PASTA_FOTOS = 'clientes_fotos' # Pasta onde salvamos a foto original do cadastro
 
-def obter_ultimo_cliente():
+def buscar_todos_clientes():
     """
-    Busca o cliente mais recente cadastrado no SQLite.
+    Busca todos os clientes cadastrados no SQLite que possuem foto registrada.
     """
     if not os.path.exists(DB_NAME):
-        return None
+        return []
         
     conexao = sqlite3.connect(DB_NAME)
     cursor = conexao.cursor()
-    # Pega o último cliente cadastrado ordenando pelo ID de forma decrescente
-    cursor.execute("SELECT id, nome, acai_preferido FROM clientes ORDER BY id DESC LIMIT 1;")
-    resultado = cursor.fetchone()
+    cursor.execute("SELECT id, nome, acai_preferido, foto_path FROM clientes;")
+    resultados = cursor.fetchall()
     conexao.close()
-    return resultado
+    return resultados
 
 def reconhecer_cliente():
     """
-    Função da Pessoa 1 (Lari - Visão Computacional):
-    - Abre a webcam em tempo real usando OpenCV.
-    - Exibe elementos visuais guia na tela.
-    - Consulta os registros do banco de dados SQLite.
-    - Retorna os dados do cliente reconhecido ou 'novo_cliente'.
+    Função da Lari (Visão Computacional):
+    - Abre a webcam.
+    - Ao pressionar ESPAÇO, tira uma foto temporária do frame atual.
+    - Compara com as fotos dos clientes cadastrados no banco usando DeepFace.
     """
     print("[IA] Iniciando captura de vídeo (Webcam) com OpenCV...")
     cap = cv2.VideoCapture(0)
@@ -44,48 +43,79 @@ def reconhecer_cliente():
             print("[ERRO] Falha ao capturar o frame da câmera.")
             break
             
-        # Adiciona elementos visuais na tela da câmera (Quadrado verde guia)
+        # Elementos visuais na tela
         altura, largura, _ = frame.shape
         cv2.rectangle(frame, (largura//3, altura//4), (2*largura//3, 3*altura//4), (0, 255, 0), 2)
         cv2.putText(frame, "Delirio Roxo - Posicione o rosto", (40, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-        # Mostra o vídeo em tempo real na tela
         cv2.imshow('Delirio Roxo - Reconhecimento Facial', frame)
         
         tecla = cv2.waitKey(1) & 0xFF
         
-        # Pressionar a tecla ESPAÇO (código 32) captura e valida com o banco SQLite
+        # Pressionar ESPAÇO (código 32) faz a verificação biométrica real
         if tecla == 32:
-            print("[IA] Processando leitura biométrica...")
-            cliente_db = obter_ultimo_cliente()
+            print("[IA] Processando leitura biométrica e comparando com o banco...")
             
-            if cliente_db:
-                cliente_encontrado = {
-                    "status": "encontrado",
-                    "id": cliente_db[0],
-                    "nome": cliente_db[1],
-                    "acai_preferido": cliente_db[2]
-                }
-                print(f"[SUCESSO] Cliente reconhecido: {cliente_encontrado['nome']}")
-            else:
-                # Se o banco estiver vazio, trata como cliente novo
-                print("[INFO] Banco vazio. Tratando como novo cliente.")
+            # Salva temporariamente o frame atual capturado da webcam
+            temp_path = "temp_capture.jpg"
+            cv2.imwrite(temp_path, frame)
+            
+            clientescadastrados = buscar_todos_clientes()
+            
+            if not clientescadastrados:
+                print("[INFO] Nenhum cliente cadastrado no banco. Tratando como novo cliente.")
                 cliente_encontrado = {"status": "novo_cliente"}
+            else:
+                match_encontrado = False
+                
+                # Compara o frame atual com a foto de cada cliente do banco
+                for cliente in clientescadastrados:
+                    cliente_id, nome, acai, foto_path = cliente
+                    
+                    if foto_path and os.path.exists(foto_path):
+                        try:
+                            # O DeepFace verifica se o rosto na webcam (temp_path) é igual ao do cadastro
+                            resultado_deepface = DeepFace.verify(
+                                img1_path=temp_path, 
+                                img2_path=foto_path, 
+                                model_name="Facenet", 
+                                enforce_detection=False
+                            )
+                            
+                            # Se passou no limiar de distância (verified = True)
+                            if resultado_deepface["verified"]:
+                                cliente_encontrado = {
+                                    "status": "encontrado",
+                                    "id": cliente_id,
+                                    "nome": nome,
+                                    "acai_preferido": acai
+                                }
+                                print(f"[SUCESSO] Cliente reconhecido: {nome} (Açaí favorito: {acai})")
+                                match_encontrado = True
+                                break
+                        except Exception as e:
+                            print(f"[AVISO] Erro ao processar biometria do cliente {nome}: {e}")
+                
+                if not match_encontrado:
+                    print("[INFO] Rosto não encontrado no sistema. Redirecionando para cadastro.")
+                    cliente_encontrado = {"status": "novo_cliente"}
+            
+            # Remove o arquivo temporário da foto da webcam
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
             break
             
-        # Pressionar ESC (código 27) para cancelar
-        elif tecla == 27:
+        elif tecla == 27: # ESC
             cliente_encontrado = {"status": "cancelado"}
             break
 
-    # Libera a câmera e fecha a janela do OpenCV
     cap.release()
     cv2.destroyAllWindows()
     
     return cliente_encontrado
 
-# Bloco para testar o arquivo de forma isolada se necessário
 if __name__ == "__main__":
     resultado = reconhecer_cliente()
     print("Resultado do reconhecimento:", resultado)
